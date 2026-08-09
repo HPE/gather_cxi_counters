@@ -39,7 +39,7 @@ int get_sample_interval() {
 }
 
 CounterLevel get_counter_level() {
-    const char* level_env = getenv("COUNTER_LEVEL");
+    const char* level_env = getenv("GATHER_CXI_COUNTERS_LEVEL");
     if (level_env == nullptr) return DEFAULT;
     char* endptr = nullptr;
     long level = strtol(level_env, &endptr, 10);

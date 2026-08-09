@@ -83,11 +83,17 @@ static void print_json_summary(const std::map<long, std::vector<uint64_t>>& init
 
 static void print_human_summary(const std::map<long, std::vector<uint64_t>>& initial_counters,
                         const std::map<long, std::vector<uint64_t>>& final_counters,
-                        double time_interval) {
+                        double time_interval,
+                        const std::string& title = "Slingshot CXI Counter Summary:",
+                        const std::vector<size_t>* only_indices = nullptr,
+                        bool only_nonzero = true) {
     /*
-     * Prints a formatted table of min, mean, max, and per-second rates for each counter
+     * Prints a formatted table of min, mean, max, and per-second rates for each counter.
+     * When only_indices is provided, only those counter indices are printed; otherwise
+     * all counters are considered. When only_nonzero is true, counters whose sum is 0
+     * are skipped.
      */
-    std::cout << "Slingshot CXI Counter Summary:" << std::endl;
+    std::cout << title << std::endl;
     std::cout
         << std::left << std::setw(46) << "Counter"
         << std::right << std::setw(12) << "Min"
@@ -97,23 +103,209 @@ static void print_human_summary(const std::map<long, std::vector<uint64_t>>& ini
         << std::setw(12) << "Max"
         << std::setw(12) << "(/s)"
         << std::endl;
-    for (size_t i = 0; i < counter_names.size(); ++i) {
+
+    auto print_row = [&](size_t i) {
         CounterStats stats = get_counter_stats(initial_counters, final_counters, i, time_interval);
-        if (stats.sum > 0) {
-            double min_sec = stats.time > 0 ? static_cast<double>(stats.min) / stats.time : 0.0;
-            double mean_sec = stats.time > 0 ? stats.mean / stats.time : 0.0;
-            double max_sec = stats.time > 0 ? static_cast<double>(stats.max) / stats.time : 0.0;
-            std::cout
-                << std::left << std::setw(46) << counter_names[i]
-                << std::right << std::setw(12) << stats.min
-                << std::setw(12) << std::fixed << std::setprecision(1) << min_sec
-                << std::setw(12) << static_cast<uint64_t>(stats.mean)
-                << std::setw(12) << std::fixed << std::setprecision(1) << mean_sec
-                << std::setw(12) << stats.max
-                << std::setw(12) << std::fixed << std::setprecision(1) << max_sec
-                << std::endl;
+        if (only_nonzero && stats.sum == 0) {
+            return;
+        }
+        double min_sec = stats.time > 0 ? static_cast<double>(stats.min) / stats.time : 0.0;
+        double mean_sec = stats.time > 0 ? stats.mean / stats.time : 0.0;
+        double max_sec = stats.time > 0 ? static_cast<double>(stats.max) / stats.time : 0.0;
+        std::cout
+            << std::left << std::setw(46) << counter_names[i]
+            << std::right << std::setw(12) << stats.min
+            << std::setw(12) << std::fixed << std::setprecision(1) << min_sec
+            << std::setw(12) << static_cast<uint64_t>(stats.mean)
+            << std::setw(12) << std::fixed << std::setprecision(1) << mean_sec
+            << std::setw(12) << stats.max
+            << std::setw(12) << std::fixed << std::setprecision(1) << max_sec
+            << std::endl;
+    };
+
+    if (only_indices) {
+        for (size_t idx : *only_indices) {
+            if (idx < counter_names.size()) print_row(idx);
+        }
+    } else {
+        for (size_t i = 0; i < counter_names.size(); ++i) {
+            print_row(i);
         }
     }
+}
+
+// Timeout counters that trigger a per-NIC dump when they change during a run.
+static const std::vector<std::string> timeout_counter_names = {
+    "rh:sct_timeouts",
+    "rh:spt_timeouts",
+    "rh:spt_timeouts_o",
+    "rh:spt_timeouts_u",
+    "rh:tct_timeouts"
+};
+
+// Resolve the indices of the timeout counters within counter_names.
+static std::vector<size_t> get_timeout_indices() {
+    std::vector<size_t> timeout_indices;
+    for (size_t i = 0; i < counter_names.size(); ++i) {
+        if (std::find(timeout_counter_names.begin(), timeout_counter_names.end(),
+                      counter_names[i]) != timeout_counter_names.end()) {
+            timeout_indices.push_back(i);
+        }
+    }
+    return timeout_indices;
+}
+
+// Return true if any timeout counter changed between the first and last sample.
+static bool nic_timeout_changed(const std::vector<uint64_t>& first_vals,
+                                const std::vector<uint64_t>& last_vals,
+                                const std::vector<size_t>& timeout_indices) {
+    for (size_t idx : timeout_indices) {
+        if (idx >= first_vals.size() || idx >= last_vals.size()) {
+            continue;
+        }
+        if (subtract_56_bit_integers(last_vals[idx], first_vals[idx]) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Print a single NIC's counters by reusing print_human_summary: the timeout
+// counters first (always shown), followed by the full non-zero counter table.
+static void print_single_nic_counters(const std::string& hostname, long procid,
+                                       const std::string& nic_name,
+                                       const std::vector<uint64_t>& first_vals,
+                                       const std::vector<uint64_t>& last_vals,
+                                       double exec_time,
+                                       const std::vector<size_t>& timeout_indices) {
+    std::map<long, std::vector<uint64_t>> initial_counters;
+    std::map<long, std::vector<uint64_t>> final_counters;
+    initial_counters[0] = first_vals;
+    final_counters[0]   = last_vals;
+
+    std::string base = "\nNode " + hostname + " (procid " + std::to_string(procid)
+                     + ") NIC " + nic_name;
+    print_human_summary(initial_counters, final_counters, exec_time,
+                        base + " — timeout counters:", &timeout_indices, /*only_nonzero=*/false);
+    print_human_summary(initial_counters, final_counters, exec_time,
+                        base + " — all counters:");
+}
+
+// If any timeout counter changed on any NIC of any node between the first and
+// last time-series samples, print the counters for every NIC of every node.
+void print_all_nics_on_timeout(const AggregatedStats& agg) {
+    std::vector<size_t> timeout_indices = get_timeout_indices();
+    if (timeout_indices.empty()) {
+        std::cout << "No timeout counters found in the active counter list; skipping per-NIC timeout report." << std::endl;
+        return;
+    }
+
+    // Global detection: any NIC on any node with a timeout change?
+    bool detected = false;
+    for (const auto& nts : agg.time_series) {
+        if (nts.samples.size() < 2) {
+            continue;
+        }
+        const TimeSample& first = nts.samples.front();
+        const TimeSample& last  = nts.samples.back();
+        for (const auto& nic_kv : first.nic_counters) {
+            auto last_it = last.nic_counters.find(nic_kv.first);
+            if (last_it == last.nic_counters.end()) {
+                continue;
+            }
+            if (nic_timeout_changed(nic_kv.second, last_it->second, timeout_indices)) {
+                detected = true;
+                break;
+            }
+        }
+        if (detected) {
+            break;
+        }
+    }
+    if (!detected) {
+        return;
+    }
+
+    // A timeout was seen somewhere — dump every NIC of every node.
+    print_all_nic_counters(agg);
+}
+
+// Print the counters only for the specific hostname/NIC pairs where a timeout
+// counter changed between the first and last samples.
+void print_timeout_nics_only(const AggregatedStats& agg) {
+    std::vector<size_t> timeout_indices = get_timeout_indices();
+    if (timeout_indices.empty()) {
+        std::cout << "No timeout counters found in the active counter list; skipping per-NIC timeout report." << std::endl;
+        return;
+    }
+
+    for (const auto& nts : agg.time_series) {
+        if (nts.samples.size() < 2) {
+            continue;
+        }
+        const TimeSample& first = nts.samples.front();
+        const TimeSample& last  = nts.samples.back();
+
+        for (const auto& nic_kv : first.nic_counters) {
+            auto last_it = last.nic_counters.find(nic_kv.first);
+            if (last_it == last.nic_counters.end()) {
+                continue;
+            }
+            if (!nic_timeout_changed(nic_kv.second, last_it->second, timeout_indices)) {
+                continue;
+            }
+            print_single_nic_counters(nts.hostname, nts.procid, nic_kv.first,
+                                      nic_kv.second, last_it->second,
+                                      nts.execution_time, timeout_indices);
+        }
+    }
+}
+
+// Print the counters for every NIC of every node, regardless of timeouts.
+void print_all_nic_counters(const AggregatedStats& agg) {
+    std::vector<size_t> timeout_indices = get_timeout_indices();
+
+    for (const auto& nts : agg.time_series) {
+        if (nts.samples.size() < 2) {
+            continue;
+        }
+        const TimeSample& first = nts.samples.front();
+        const TimeSample& last  = nts.samples.back();
+
+        for (const auto& nic_kv : first.nic_counters) {
+            auto last_it = last.nic_counters.find(nic_kv.first);
+            if (last_it == last.nic_counters.end()) {
+                continue;
+            }
+            print_single_nic_counters(nts.hostname, nts.procid, nic_kv.first,
+                                      nic_kv.second, last_it->second,
+                                      nts.execution_time, timeout_indices);
+        }
+    }
+}
+
+// Print the aggregated timeout counter values across all nodes, reusing
+// print_human_summary restricted to the timeout counters.
+void print_aggregated_timeouts(const AggregatedStats& agg) {
+    std::vector<size_t> timeout_indices = get_timeout_indices();
+    if (timeout_indices.empty()) {
+        std::cout << "No timeout counters found in the active counter list; skipping aggregated timeout report." << std::endl;
+        return;
+    }
+
+    std::map<long, std::vector<uint64_t>> initial_counters;
+    std::map<long, std::vector<uint64_t>> final_counters;
+    for (size_t i = 0; i < agg.procids.size(); ++i) {
+        initial_counters[agg.procids[i]] = agg.all_initial[i];
+        final_counters[agg.procids[i]]   = agg.all_final[i];
+    }
+
+    double avg_time = agg.times.empty() ? 0.0
+        : std::accumulate(agg.times.begin(), agg.times.end(), 0.0) / agg.times.size();
+
+    print_human_summary(initial_counters, final_counters, avg_time,
+                        "Aggregated timeout counters:", &timeout_indices,
+                        /*only_nonzero=*/false);
 }
 
 static void print_detailed_json_summary(const AggregatedStats& agg, const std::vector<std::string>& cmd_args) {
@@ -1951,7 +2143,7 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
                                            format == OutputFormat::CSV_WIDE);
                 std::cerr << "Results written to: " << csv_filename << " and " << md_filename << std::endl;
             }
-        } else if (is_detailed_enabled() || format == OutputFormat::JSON) {
+        } else if (format == OutputFormat::JSON) {
             print_detailed_json_summary(agg, cmd_args);
         } else {
             // Standard text output
@@ -1963,6 +2155,26 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
             }
             double avg_time = std::accumulate(agg.times.begin(), agg.times.end(), 0.0) / agg.times.size();
             print_summary(initial_counters, final_counters, avg_time);
+
+            if (get_counter_level() == DEFAULT) {
+
+            } else if (get_counter_level() == SUMMARY) {
+                            // Standard text output
+                std::map<long, std::vector<uint64_t>> initial_counters;
+                std::map<long, std::vector<uint64_t>> final_counters;
+                for (size_t i = 0; i < agg.procids.size(); ++i) {
+                    initial_counters[agg.procids[i]] = agg.all_initial[i];
+                    final_counters[agg.procids[i]] = agg.all_final[i];
+                }
+                double avg_time = std::accumulate(agg.times.begin(), agg.times.end(), 0.0) / agg.times.size();
+                print_summary(initial_counters, final_counters, avg_time);
+            } else if (get_counter_level() == ALL_ON_ERROR) {
+                print_all_nics_on_timeout(agg);
+            } else if (get_counter_level() == ON_ERROR) {
+                print_timeout_nics_only(agg);
+            } else if (get_counter_level() == ALL) {
+                print_all_nic_counters(agg);
+            }
         }
     } else {
         /*
@@ -1971,3 +2183,4 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
         send_to_previous(agg, procid);
     }
 }
+

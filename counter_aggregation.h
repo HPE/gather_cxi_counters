@@ -78,6 +78,21 @@ void print_summary(const std::map<long, std::vector<uint64_t>>& initial_counters
                         const std::map<long, std::vector<uint64_t>>& final_counters,
                         double time_interval);
 
+// If any timeout counter changed on any NIC of any node between the first and
+// last time-series samples, print the counters for every NIC of every node.
+void print_all_nics_on_timeout(const AggregatedStats& agg);
+
+// Print the counters only for the specific hostname/NIC pairs where a timeout
+// counter changed between the first and last time-series samples.
+void print_timeout_nics_only(const AggregatedStats& agg);
+
+// Print the counters for every NIC of every node, regardless of timeouts.
+void print_all_nic_counters(const AggregatedStats& agg);
+
+// Print the aggregated timeout counter values across all nodes using
+// the human-readable summary format.
+void print_aggregated_timeouts(const AggregatedStats& agg);
+
 // Unified handler for all node types in chain aggregation
 void node_handler(bool is_first, bool is_last, long procid, long node_count, int cmd_start_idx, int argc, char* argv[], const std::string& experiment_name = "");
 

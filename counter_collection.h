@@ -22,7 +22,7 @@ extern std::vector<std::string> counter_names;
 // Initialise counter filtering from GATHER_CXI_COUNTERS env var.
 // If the variable is empty or unset the full list is used.
 // Must be called once before any read_all_counters*() call.
-void init_counter_filter();
+void init_counter_filter(int level);
 
 // Initialise fd-cached reader.  Opens all sysfs/run files once.
 // Must be called after init_counter_filter() and before sampling begins.

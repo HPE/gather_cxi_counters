@@ -78,12 +78,17 @@
  * and calls node_handler() with appropriate flags for chain aggregation.
  */
 int main(int argc, char* argv[]) {
+    int level = getenv("GATHER_CXI_COUNTERS_LEVEL") ? atoi(getenv("GATHER_CXI_COUNTERS_LEVEL")) : 0;
+    if (level <= 0) {
+        std::cerr << "GATHER_CXI_COUNTERS_LEVEL set to 0, exiting." << std::endl;
+        return 1;
+    }
     // Apply CPU pinning early (before any metric/thread work)
     apply_cpu_pin();
 
     // Initialise counter filtering (GATHER_CXI_COUNTERS env var) before
     // any counter_names use.  Must happen before NicMetricSource construction.
-    init_counter_filter();
+    init_counter_filter(level);
 
     // Parse experiment name flag (-e)
     std::string experiment_name;
