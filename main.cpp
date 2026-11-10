@@ -179,11 +179,11 @@ int main(int argc, char* argv[]) {
     if (node_count == 1) {
         // Always use node_handler: it respects GATHER_CXI_OUTPUT_FORMAT and writes
         // the CSV (including latency-only output when GATHER_CXI_DETAILED=0).
-        node_handler(true, true, 0, 1, cmd_start_idx, argc, argv, experiment_name);
+        int status = node_handler(true, true, 0, 1, cmd_start_idx, argc, argv, experiment_name);
 
         cleanup_counter_fds();
         registry.cleanup_all();
-        return 0;
+        return status;
     }
 
     /*
@@ -199,10 +199,10 @@ int main(int argc, char* argv[]) {
      * First node: receive aggregated stats and print summary
      */
     else if (procid == 0) {
-        node_handler(true, false, procid, node_count, cmd_start_idx, argc, argv, experiment_name);
+        int status = node_handler(true, false, procid, node_count, cmd_start_idx, argc, argv, experiment_name);
         cleanup_counter_fds();
         registry.cleanup_all();
-        return 0;
+        return status;
     }
     /*
      * Middle nodes: receive stats, add own, forward to previous node

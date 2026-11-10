@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
+#include <filesystem>
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -308,7 +310,19 @@ void print_aggregated_timeouts(const AggregatedStats& agg) {
                         /*only_nonzero=*/false);
 }
 
-static void print_detailed_json_summary(const AggregatedStats& agg, const std::vector<std::string>& cmd_args) {
+static nlohmann::json env_or_null(const char* name) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') return nullptr;
+    return value;
+}
+
+static bool env_is_one(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && std::string(value) == "1";
+}
+
+static void print_detailed_json_summary(const AggregatedStats& agg, const std::vector<std::string>& cmd_args,
+                                        const std::string& experiment_name, std::ostream& out) {
     nlohmann::json j;
     j["version"] = "2.0";
 
@@ -324,6 +338,16 @@ static void print_detailed_json_summary(const AggregatedStats& agg, const std::v
     j["metadata"]["sample_interval_ms"] = get_sample_interval();
     j["metadata"]["counter_names"] = counter_names;
     j["metadata"]["node_count"] = agg.hostnames.size();
+    j["metadata"]["settings"] = {
+        {"experiment_name", experiment_name.empty() ? nlohmann::json(nullptr) : nlohmann::json(experiment_name)},
+        {"counter_level", static_cast<int>(get_counter_level())},
+        {"counters_filter", env_or_null("GATHER_CXI_COUNTERS")},
+        {"port", std::stoi(get_zmq_port())},
+        {"detailed", is_detailed_enabled()},
+        {"os_metrics", env_is_one("GATHER_CXI_OS_METRICS")},
+        {"nccl_profiler", env_is_one("GATHER_CXI_NCCL_PROFILER")},
+        {"cpu_pin", env_or_null("GATHER_CXI_CPU_PIN")}
+    };
 
     // Nodes data
     j["nodes"] = nlohmann::json::array();
@@ -430,7 +454,50 @@ static void print_detailed_json_summary(const AggregatedStats& agg, const std::v
         }
     }
 
-    std::cout << j.dump(4) << std::endl;
+    out << j.dump(4) << std::endl;
+}
+
+// Where to write JSON output: GATHER_CXI_JSON_FILE if set, otherwise
+// runlogs/<experiment>.json when -e is given, otherwise "" (stdout).
+static std::string get_json_output_path(const std::string& experiment_name) {
+    const char* path_env = std::getenv("GATHER_CXI_JSON_FILE");
+    if (path_env != nullptr && path_env[0] != '\0') {
+        return path_env;
+    }
+    if (!experiment_name.empty()) {
+        return "runlogs/" + experiment_name + ".json";
+    }
+    return "";
+}
+
+static bool write_detailed_json_file(const std::string& path, const AggregatedStats& agg,
+                                     const std::vector<std::string>& cmd_args,
+                                     const std::string& experiment_name) {
+    const std::filesystem::path parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            std::cerr << "Error: cannot create directory " << parent.string() << " for JSON output: "
+                      << ec.message() << std::endl;
+            return false;
+        }
+    }
+
+    std::ofstream out(path);
+    if (!out) {
+        std::cerr << "Error: cannot open JSON output file " << path << ": "
+                  << std::strerror(errno) << std::endl;
+        return false;
+    }
+    print_detailed_json_summary(agg, cmd_args, experiment_name, out);
+    out.close();
+    if (!out) {
+        std::cerr << "Error: failed to write JSON output file " << path << std::endl;
+        return false;
+    }
+    std::cerr << "Results written to: " << path << std::endl;
+    return true;
 }
 
 // Helper function to align timestamp to sampling interval boundary
@@ -1984,7 +2051,7 @@ void print_summary(const std::map<long, std::vector<uint64_t>>& initial_counters
     }
 }
 
-void node_handler(bool is_first, bool is_last, long procid, long node_count, int cmd_start_idx, int argc, char* argv[], const std::string& experiment_name) {
+int node_handler(bool is_first, bool is_last, long procid, long node_count, int cmd_start_idx, int argc, char* argv[], const std::string& experiment_name) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
 
@@ -2117,6 +2184,10 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
 
         // Print output based on format
         OutputFormat format = get_output_format();
+        if (format != OutputFormat::JSON && std::getenv("GATHER_CXI_JSON_FILE") != nullptr) {
+            std::cerr << "Warning: GATHER_CXI_JSON_FILE is ignored because JSON output is not enabled "
+                      << "(set GATHER_CXI_JSON=1)." << std::endl;
+        }
         if (format == OutputFormat::CSV_WIDE || format == OutputFormat::CSV_TALL) {
             // Generate filenames if experiment_name is provided
             std::string csv_filename;
@@ -2144,7 +2215,12 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
                 std::cerr << "Results written to: " << csv_filename << " and " << md_filename << std::endl;
             }
         } else if (format == OutputFormat::JSON) {
-            print_detailed_json_summary(agg, cmd_args);
+            const std::string json_path = get_json_output_path(experiment_name);
+            if (json_path.empty()) {
+                print_detailed_json_summary(agg, cmd_args, experiment_name, std::cout);
+            } else if (!write_detailed_json_file(json_path, agg, cmd_args, experiment_name)) {
+                return 1;
+            }
         } else {
             // Standard text output
             std::map<long, std::vector<uint64_t>> initial_counters;
@@ -2182,5 +2258,6 @@ void node_handler(bool is_first, bool is_last, long procid, long node_count, int
          */
         send_to_previous(agg, procid);
     }
+    return 0;
 }
 

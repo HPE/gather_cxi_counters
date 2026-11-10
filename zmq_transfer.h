@@ -5,6 +5,9 @@
 #include <vector>
 #include <string>
 
+// Port used for inter-node aggregation (GATHER_CXI_PORT, default 15555)
+std::string get_zmq_port();
+
 // Serialize AggregatedStats to binary
 std::vector<char> serialize(const AggregatedStats& agg);
 
