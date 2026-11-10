@@ -8,6 +8,7 @@
 #include <cstring>
 #include <unistd.h>
 #include <cstdlib>
+#include <climits>
 
 #define ZMQ_DEFAULT_PORT "15555"
 
@@ -303,7 +304,7 @@ void receive_aggregated_stats(AggregatedStats& agg) {
     try {
         server.bind("tcp://*:" + port);
     } catch (const zmq::error_t& e) {
-        char host[256];
+        char host[HOST_NAME_MAX + 1];
         gethostname(host, sizeof(host));
         std::cerr << "Error: cannot bind ZMQ port " << port << " on " << host << ": "
                   << e.what() << ". Set GATHER_CXI_PORT to a free port "
