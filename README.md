@@ -173,6 +173,7 @@ are no command-line flags (except the optional `-e` experiment name; see
 | `GATHER_CXI_INTERVAL` | `100` | Time-series sampling interval in milliseconds (used when `GATHER_CXI_DETAILED=1`) |
 | `GATHER_CXI_OS_METRICS` | `0` | Set to `1` to enable Linux perf event metric collection alongside CXI counters |
 | `GATHER_CXI_NCCL_PROFILER` | `0` | Set to `1` to enable the NCCL/RCCL proxy-step profiler plugin (requires `librccl-profiler-gather.so` in `LD_LIBRARY_PATH`) |
+| `GATHER_CXI_PORT` | `15555` | TCP port the nodes use to send counter data to each other. Every node in the job must use the same value. If the job fails with `Address already in use`, another program is using this port; pick a free one |
 | `GATHER_CXI_CPU_PIN` | _(none)_ | CPU affinity mask for the sidecar collection thread |
 
 ### COUNTER_LEVEL behavior note
@@ -350,7 +351,8 @@ or nodes were not allocated contiguously.
 
 **Fix:**
 1. Enable verbose ZMQ logging: `GATHER_CXI_LOG=1 srun ...`
-2. Confirm all allocated nodes can reach each other on the required ZMQ port.
+2. Confirm all allocated nodes can reach each other on the ZMQ port (default
+   `15555`, override with `GATHER_CXI_PORT`).
 3. Ensure `--ntasks-per-node=1` so each node has exactly one aggregating task.
 
 ---
