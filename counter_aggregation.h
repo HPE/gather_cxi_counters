@@ -93,7 +93,8 @@ void print_all_nic_counters(const AggregatedStats& agg);
 // the human-readable summary format.
 void print_aggregated_timeouts(const AggregatedStats& agg);
 
-// Unified handler for all node types in chain aggregation
-void node_handler(bool is_first, bool is_last, long procid, long node_count, int cmd_start_idx, int argc, char* argv[], const std::string& experiment_name = "");
+// Unified handler for all node types in chain aggregation.
+// Returns 0 on success, non-zero if the first node fails to write its output.
+int node_handler(bool is_first, bool is_last, long procid, long node_count, int cmd_start_idx, int argc, char* argv[], const std::string& experiment_name = "");
 
 #endif

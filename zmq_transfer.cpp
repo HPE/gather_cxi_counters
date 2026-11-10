@@ -15,7 +15,7 @@
 // Port for inter-node ZMQ traffic; override with GATHER_CXI_PORT. The default
 // avoids 5555, which nv-hostengine (NVIDIA DCGM) uses on GPU nodes. Must match
 // on every node of the job.
-static std::string zmq_port() {
+std::string get_zmq_port() {
     const char* env = std::getenv("GATHER_CXI_PORT");
     if (env != nullptr && *env != '\0') {
         char* end = nullptr;
@@ -300,7 +300,7 @@ AggregatedStats deserialize(const std::vector<char>& data) {
 void receive_aggregated_stats(AggregatedStats& agg) {
     zmq::context_t context(1);
     zmq::socket_t server(context, ZMQ_PULL);
-    const std::string port = zmq_port();
+    const std::string port = get_zmq_port();
     try {
         server.bind("tcp://*:" + port);
     } catch (const zmq::error_t& e) {
@@ -336,7 +336,7 @@ void send_to_previous(const AggregatedStats& agg, long procid) {
     zmq::socket_t client(context, ZMQ_PUSH);
     std::vector<std::string> nodes = get_node_list_from_scontrol();
     std::string prev_node = get_previous_node(nodes, procid);
-    std::string endpoint = "tcp://" + prev_node + ":" + zmq_port();
+    std::string endpoint = "tcp://" + prev_node + ":" + get_zmq_port();
     client.connect(endpoint.c_str());
     std::vector<char> data = serialize(agg);
 

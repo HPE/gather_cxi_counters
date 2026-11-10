@@ -166,6 +166,7 @@ are no command-line flags (except the optional `-e` experiment name; see
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GATHER_CXI_JSON` | `0` | Set to `1` to emit output as JSON instead of a text table |
+| `GATHER_CXI_JSON_FILE` | _(none)_ | Write the JSON summary to this file instead of stdout (requires `GATHER_CXI_JSON=1`). Overrides the `runlogs/<name>.json` file written when `-e <name>` is given |
 | `COUNTER_LEVEL` | `1` | Output verbosity: `0`=quiet, `1`=default, `2`=summary, `3`=on_error, `4`=all_on_error, `5`=all counters |
 | `GATHER_CXI_COUNTERS` | _(all)_ | Comma-separated list of counter names to collect; filters the counter set at runtime |
 | `GATHER_CXI_LOG` | `0` | Set to `1` to enable verbose logging of inter-node ZMQ communication |
@@ -288,6 +289,30 @@ Tag a run with an experiment name for downstream identification in CSV output:
 srun -N 4 -n 4 --ntasks-per-node=1 ./gather_cxi_counters -e allreduce_4node \
     ./all_reduce_perf -b 8 -e 4G -f 2
 ```
+
+With CSV output, this writes `runlogs/<name>.csv` and `runlogs/<name>.md`.
+With JSON output (`GATHER_CXI_JSON=1`), it writes `runlogs/<name>.json`
+instead of printing to stdout.
+
+### Writing JSON to a file (`GATHER_CXI_JSON_FILE`)
+
+By default the JSON summary is printed to stdout on the first node, mixed with
+the wrapped command's output. To keep it separate, write it to a file:
+
+```bash
+GATHER_CXI_JSON=1 GATHER_CXI_JSON_FILE=counters.$SLURM_JOB_ID.json \
+    srun -N 4 -n 4 --ntasks-per-node=1 ./gather_cxi_counters ./my_benchmark
+```
+
+Only the first node writes the file; missing parent directories are created.
+The path is printed to stderr as `Results written to: <path>`. If the file
+cannot be written, the tool prints an error and exits non-zero.
+
+The JSON records the settings used for the run under `metadata.settings`
+(experiment name, counter level, `GATHER_CXI_COUNTERS` filter, port, and the
+detailed / OS-metrics / NCCL-profiler / CPU-pin options). Counters listed in
+`metadata.counter_names` but absent from `aggregate.counters` had a delta of
+zero.
 
 ### Counter filtering (`GATHER_CXI_COUNTERS`)
 
