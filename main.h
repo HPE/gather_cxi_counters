@@ -19,8 +19,6 @@
 #include <numeric>
 #include <tuple>
 
-#define ZMQ_PORT "5555"
-
 #include "utils.h"
 #include "counter_collection.h"
 #include "counter_aggregation.h"

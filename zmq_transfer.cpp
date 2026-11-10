@@ -7,8 +7,27 @@
 #include <string>
 #include <cstring>
 #include <unistd.h>
+#include <cstdlib>
+#include <climits>
 
-#define ZMQ_PORT "5555"
+#define ZMQ_DEFAULT_PORT "15555"
+
+// Port for inter-node ZMQ traffic; override with GATHER_CXI_PORT. The default
+// avoids 5555, which nv-hostengine (NVIDIA DCGM) uses on GPU nodes. Must match
+// on every node of the job.
+static std::string zmq_port() {
+    const char* env = std::getenv("GATHER_CXI_PORT");
+    if (env != nullptr && *env != '\0') {
+        char* end = nullptr;
+        long port = std::strtol(env, &end, 10);
+        if (*end == '\0' && port > 0 && port < 65536) {
+            return std::to_string(port);
+        }
+        std::cerr << "Warning: invalid GATHER_CXI_PORT='" << env
+                  << "', using " << ZMQ_DEFAULT_PORT << std::endl;
+    }
+    return ZMQ_DEFAULT_PORT;
+}
 
 std::vector<char> serialize(const AggregatedStats& agg) {
     std::vector<char> buffer;
@@ -281,7 +300,17 @@ AggregatedStats deserialize(const std::vector<char>& data) {
 void receive_aggregated_stats(AggregatedStats& agg) {
     zmq::context_t context(1);
     zmq::socket_t server(context, ZMQ_PULL);
-    server.bind("tcp://*:" ZMQ_PORT);
+    const std::string port = zmq_port();
+    try {
+        server.bind("tcp://*:" + port);
+    } catch (const zmq::error_t& e) {
+        char host[HOST_NAME_MAX + 1];
+        gethostname(host, sizeof(host));
+        std::cerr << "Error: cannot bind ZMQ port " << port << " on " << host << ": "
+                  << e.what() << ". Set GATHER_CXI_PORT to a free port "
+                  << "(same value on all nodes)." << std::endl;
+        throw;
+    }
 
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
@@ -307,7 +336,7 @@ void send_to_previous(const AggregatedStats& agg, long procid) {
     zmq::socket_t client(context, ZMQ_PUSH);
     std::vector<std::string> nodes = get_node_list_from_scontrol();
     std::string prev_node = get_previous_node(nodes, procid);
-    std::string endpoint = "tcp://" + prev_node + ":" ZMQ_PORT;
+    std::string endpoint = "tcp://" + prev_node + ":" + zmq_port();
     client.connect(endpoint.c_str());
     std::vector<char> data = serialize(agg);
 
